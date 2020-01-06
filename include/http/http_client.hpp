@@ -1,11 +1,11 @@
  /**
  *****************************************************************************
  *
- *@note shineframe¿ª·¢¿ò¼Ü https://github.com/shineframe/shineframe
+ *@note shineframeï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ https://github.com/shineframe/shineframe
  *
  *@file http_client.hpp
  *
- *@brief http¿Í»§¶Ë
+ *@brief httpï¿½Í»ï¿½ï¿½ï¿½
  *
  *@todo 
  *
@@ -46,6 +46,31 @@ namespace shine
         typedef http::response* response_ptr_t;
         typedef std::function<void(bool success, const http::request &request, http::response &response)> response_handle_t;
 
+		inline int htoi(const char *s) {
+			int i;
+			int n = 0;
+			if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+			{
+				i = 2;
+			}
+			else
+			{
+				i = 0;
+			}
+			for (; (s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z'); ++i)
+			{
+				if (tolower(s[i]) > '9')
+				{
+					n = 16 * n + (10 + tolower(s[i]) - 'a');
+				}
+				else
+				{
+					n = 16 * n + (tolower(s[i]) - '0');
+				}
+			}
+			return n;
+		}
+
         class client_base{
         public:
             client_base()
@@ -79,7 +104,7 @@ namespace shine
                         }
 
                         shine::size_t cost_len = get_response().decode_header(get_buf().data() + get_buf_pos(), (pos - get_buf_pos()) + 4);
-                        if (cost_len < 0)
+                        if (cost_len == (shine::size_t)-1)
                             return false;
 
                         get_buf_pos() += cost_len;
@@ -88,11 +113,46 @@ namespace shine
 
                     if (get_decode_step() == http::e_decode_body)
                     {
-                        if (get_response().get_content_length() > get_buf().size() - get_buf_pos())
-                            return true;
+						if (!get_response().get_is_chunk()) {
+							if (get_response().get_content_length() > get_buf().size() - get_buf_pos())
+								return true;
 
-                        get_response().get_body().assign(get_buf().data() + get_buf_pos(), get_buf().size() - get_buf_pos());
-                        set_buf_pos(get_buf_pos() + get_response().get_content_length());
+							get_response().get_body().assign(get_buf().data() + get_buf_pos(), get_buf().size() - get_buf_pos());
+							set_buf_pos(get_buf_pos() + get_response().get_content_length());
+						}
+						else {
+							shine::string &buf = get_buf();
+							shine::size_t pos = get_buf_pos();
+							shine::string &body = get_response().get_body();
+							body.clear();
+
+							while (true) {
+								auto flag = buf.find("\r\n", pos);
+								if (flag != shine::string::npos) {
+									shine::string tmp = buf.substr(pos, flag - pos);
+									pos = flag + 2;
+									std::size_t len = htoi(tmp.c_str());
+
+									if (len > 0) {
+										if (buf.size() < pos + len + 2)
+										{
+											return true;
+										}
+
+										body.append(buf.data() + pos, len);
+										pos += len + 2;
+									}
+									else
+									{
+										break;
+									}
+
+								}
+								else {
+									return true;
+								}
+							}
+						}
 
                         if (get_sync_mode())
                         {
@@ -228,7 +288,7 @@ namespace shine
                     if (addr.find(":") == string::npos)
                         addr += ":80";
 
-                    if (!net::socket::connect(get_socket_fd(), addr, get_recv_timeout()))
+                    if (net::socket::connect(get_socket_fd(), addr, get_recv_timeout()) != net::socket::e_success)
                     {
                         close_connection();
                         return false;

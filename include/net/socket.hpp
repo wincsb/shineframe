@@ -35,8 +35,20 @@ typedef SOCKET socket_t;
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+
+#if defined SHINE_OS_LINUX
+
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+
+#elif defined SHINE_OS_APPLE
+
+#include <sys/event.h>
+
+#endif
+
+#include <sys/time.h>
+
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
@@ -181,7 +193,7 @@ namespace shine
              *@note 
             */
             static bool bind(socket_t fd, const string &addr/*ip:port*/){
-#ifdef SHINE_OS_LINUX
+#if (defined SHINE_OS_LINUX || defined SHINE_OS_APPLE || defined SHINE_OS_UNIX)
                 if (addr == "0.0.0.0:0")
                     return true;
 #endif
@@ -250,11 +262,20 @@ namespace shine
 			*@warning
 			*@note
 			*/
-			static bool connect(socket_t fd, const string &addr, uint32 timeout)
+            
+            enum connect_error_t{
+                e_success = 0,
+                e_parse_failed = 1,
+                e_dns_failed = 2,
+                e_inprocess = 3,
+                e_timeout = 4,
+                e_other = 5
+            };
+			static connect_error_t connect(socket_t fd, const string &addr, uint32 timeout)
 			{
 				address_info_t info;
 				if (!parse_addr(addr, info))
-					return false;
+					return e_parse_failed;
 
 				char ip[128];
 				SHINE_SNPRINTF(ip, sizeof(ip) - 1, "%s", info.get_ip().c_str());
@@ -267,7 +288,7 @@ namespace shine
 
 				struct addrinfo *result;
 				if (getaddrinfo(ip, NULL, NULL, &result) != 0)
-					return false;
+					return e_dns_failed;
 
 				struct sockaddr *sa = result->ai_addr;
 				socklen_t maxlen = sizeof(ip);
@@ -275,7 +296,7 @@ namespace shine
 				if (sa->sa_family == AF_INET) {
 					char *tmp = (char *)ip;
 					if (inet_ntop(AF_INET, (void *)&(((struct sockaddr_in *) sa)->sin_addr), tmp, maxlen) == NULL)
-						return false;
+						return e_dns_failed;
 
 					svraddr_4.sin_family = AF_INET;
 					svraddr_4.sin_addr.s_addr = inet_addr(ip);
@@ -285,14 +306,14 @@ namespace shine
 				}
 				else if (sa->sa_family == AF_INET6) {
 					if (inet_ntop(AF_INET6, &(((struct sockaddr_in6 *) sa)->sin6_addr), ip, maxlen) != 0)
-						return false;
+						return e_dns_failed;
 
 					memset(&svraddr_6, 0, sizeof(svraddr_6));
 					svraddr_6.sin6_family = AF_INET6;
 					svraddr_6.sin6_port = htons(port);
 
 					if (inet_pton(AF_INET6, ip, &svraddr_6.sin6_addr) < 0)
-						return false;
+						return e_dns_failed;
 
 					svraddr_len = sizeof(svraddr_6);
 					svraddr = &svraddr_6;
@@ -302,37 +323,46 @@ namespace shine
 
 				set_noblock(fd, true);
 
-				bool ret = false;
+				connect_error_t ret = e_success;
 				if (::connect(fd, (struct sockaddr*)svraddr, svraddr_len) != 0)
 				{
 					int32 err = get_error();
 #if (defined SHINE_OS_WINDOWS)
 					if (err != WSAEINPROGRESS && err != WSAEWOULDBLOCK) {
-						ret = false;
+						ret = e_other;
 					}
 #else
 					if (err != EINPROGRESS && err != EWOULDBLOCK) {
-						ret = false;
+						ret = e_other;
 					}
 #endif
-					else if (timeout > 0)
-					{
-						struct timeval tv;
-						tv.tv_sec = timeout / 1000;
-						tv.tv_usec = timeout % 1000;
-						fd_set wset, rset;
-						FD_ZERO(&wset);
-						FD_ZERO(&rset);
-						FD_SET(fd, &wset);
-						FD_SET(fd, &rset);
+                    else{
+                        if (timeout > 0)
+                        {
+                            struct timeval tv;
+                            tv.tv_sec = timeout / 1000;
+                            tv.tv_usec = (timeout % 1000) * 1000;
+                            fd_set wset;
+                            FD_ZERO(&wset);
+                            FD_SET(fd, &wset);
 
-						if (::select((int)fd + 1, &rset, &wset, NULL, &tv) == 1)
-							ret = FD_ISSET(fd, &wset) == 1 ? true : false;
-					}
+                            if (::select((int)fd + 1, NULL, &wset, NULL, &tv) == 1){
+                                ret = FD_ISSET(fd, &wset) ? e_success : e_timeout;
+                            }
+                            
+                            else{
+                                err = get_error();
+								ret = e_other;
+                            }
+                        }
+                        else{
+                            ret = e_inprocess;
+                        }
+                    }
 				}
 				else
 				{
-					ret = true;
+					ret = e_success;
 				}
 
 				set_noblock(fd, false);
@@ -364,7 +394,6 @@ namespace shine
 				{
 					struct sockaddr *sa = result->ai_addr;
 					if (sa->sa_family == AF_INET) {
-						char *tmp = (char *)ip;
 						if (inet_ntop(AF_INET, (void *)&(((struct sockaddr_in *) sa)->sin_addr), ip, maxlen) != NULL)
 						{
 							ret.emplace_back(std::make_pair(ip, false));
@@ -394,7 +423,7 @@ namespace shine
             */
             static bool create_socketpair(std::pair<socket_t, socket_t> &pair) {
 
-#if (defined SHINE_OS_LINUX || defined SHINE_OS_ANDROID)
+#if (defined SHINE_OS_LINUX || defined SHINE_OS_ANDROID || defined SHINE_OS_UNIX || defined SHINE_OS_APPLE)
                 int sockets[2];
                 if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) < 0)
                     return false;

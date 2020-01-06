@@ -1,22 +1,6 @@
- /**
- *****************************************************************************
- *
- *@file string.hpp
- *
- *@brief �ַ�����װ
- *
- *@todo 
- * 
- *@note shineframe������� https://github.com/shineframe/shineframe
- *
- *@author sunjian 39215174@qq.com
- *
- *@version 1.0
- *
- *@date 2018/6/15 
- *****************************************************************************
- */
+
 #pragma once
+#include <iostream>
 #include <stdlib.h>
 #include <string.h>
 #include <string>
@@ -26,11 +10,10 @@
 #include "../common/define.hpp"
 #include "tool.hpp"
 #include "md5.hpp"
-
-#ifdef SHINE_OS_WINDOWS
-#include <windows.h>
-#elif defined SHINE_OS_LINUX
+#if !(defined SHINE_OS_ANDROID)
+#if (defined SHINE_OS_LINUX || defined SHINE_OS_APPLE)
 #include <iconv.h>
+#endif
 #endif
 
 static const std::string base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -43,7 +26,7 @@ namespace shine
     {
     public:
         string(){}
-        string(const int8* str) : std::string(str) {}
+        string(const int8* str) : std::string(str == 0 ? "" : str) {}
         string(const std::string &other) : std::string(other){}
         string(std::string &&other) : std::string(other){}
         string(const string &other) : std::string(other){}
@@ -98,7 +81,7 @@ namespace shine
         }
 
         template<class T>
-        std::string number_to_string(const int8 *fmt, const T &num){
+        std::string number_to_string(const int8 *fmt, const T &num) const {
             int8 buf[64];
             size_t len = SHINE_SNPRINTF(buf, sizeof(buf), fmt, num);
             char *pos = strstr(buf, ".");
@@ -109,52 +92,72 @@ namespace shine
                     buf[len] = '\0';
             }
 
-            return std::move(std::string(buf));
+            return buf;
         }
 
         int16 to_int16(){
-            return (int16)std::stoi(*this);
+            return (int16)::atoi(this->c_str());
         }
 
-        uint16 to_uint16(){
-            return (uint16)std::stoul(*this);
+        uint16 to_uint16() const {
+            return (uint16)::atoi(this->c_str());
         }
 
-        int32 to_int32(){
-            return std::stoi(*this);
+        int32 to_int32() const{
+            return ::atoi(this->c_str());
         }
 
-        uint32 to_uint32(){
-            return (uint32)std::stoul(*this);
+        uint32 to_uint32() const {
+            return (uint32)::atoi(this->c_str());
         }
 
-        Long to_long(){
-            return std::stol(*this);
+        Long to_long() const {
+            return (Long)::atol(this->c_str());
         }
 
-        uLong to_ulong(){
-            return std::stoul(*this);
+        uLong to_ulong() const {
+            return (uLong)::atol(this->c_str());
         }
 
-        int64 to_int64(){
-            return std::stoll(*this);
+        int64 to_int64() const {
+            return ::atoll(this->c_str());
         }
 
-        uint64 to_uint64(){
-            return (uint32)std::stoull(*this);
+        uint64 to_uint64() const {
+            return (uint64)::atoll(this->c_str());
         }
 
-        Float to_float(){
-            return std::stof(*this);
+        Float to_float() const {
+            return (Float)::atof(this->c_str());
         }
 
-        Double to_double(){
-            return std::stod(*this);
+        Double to_double() const {
+            return ::atof(this->c_str());
         }
 
-        LDouble to_long_double(){
-            return std::stold(*this);
+        LDouble to_long_double() const {
+            return (LDouble)::atof(this->c_str());
         }
+
+		operator const char*() const {
+			return c_str();
+		}
+
+		operator char*() const {
+			return (char*)data();
+		}
+
+		operator void*() const {
+			return (void*)data();
+		}
+
+		char & operator [] (int32 pos) {
+			return at(pos);
+		}
+
+		const char& operator [] (int32 pos) const {
+			return at(pos);
+		}
 
         string &operator=(const string &v){
             std::string::assign(v.data(), v.size());
@@ -504,24 +507,85 @@ namespace shine
             return trim_left().trim_right();
         }
 
-        bool contains(const char* text){
+        bool contains(const char* text) const {
             return find(text) != std::string::npos;
         }
 
+		static bool is_utf8(const char* str, std::size_t length)
+		{
+			std::size_t i = 0;
+			unsigned char bytes = 0;//UFT8可用1-6个字节编码,ASCII用一个字节
+			unsigned char chr;
+			bool all_ascii = true; //如果全部都是ASCII, 说明不是UTF-8
+
+			for (i = 0; i < length; i++)
+			{
+				chr = *(str + i);
+
+				// 判断是否ASCII编码,如果不是,说明有可能是UTF-8,ASCII用7位编码,但用一个字节存,最高位标记为0,o0xxxxxxx
+				if ((chr & 0x80) != 0)
+					all_ascii = false;
+
+				if (bytes == 0) //如果不是ASCII码,应该是多字节符,计算字节数
+				{
+					if (chr >= 0x80)
+					{
+						if (chr >= 0xFC && chr <= 0xFD)
+							bytes = 6;
+						else if (chr >= 0xF8)
+							bytes = 5;
+						else if (chr >= 0xF0)
+							bytes = 4;
+						else if (chr >= 0xE0)
+							bytes = 3;
+						else if (chr >= 0xC0)
+							bytes = 2;
+						else
+						{
+							return false;
+						}
+						bytes--;
+					}
+				}
+				else //多字节符的非首字节,应为 10xxxxxx
+				{
+					if ((chr & 0xC0) != 0x80)
+					{
+						return false;
+					}
+					bytes--;
+				}
+			}
+
+			if (bytes > 0) //违返规则
+			{
+				return false;
+			}
+
+			if (all_ascii) //如果全部都是ASCII, 说明不是UTF-8
+			{
+				return false;
+			}
+
+			return true;
+		}
+
+
+#if !(defined SHINE_OS_ANDROID)
 #ifdef SHINE_OS_WINDOWS
 /*
 		static string gbk_2_utf8(const string &gbk_str) {
-			std::wstring_convert<std::codecvt_utf8<wchar_t>> cvt_utf8;//UTF-8<->Unicodeת����
-			std::wstring_convert<std::codecvt<wchar_t, char, std::mbstate_t>>cvt_ansi(new std::codecvt<wchar_t, char, std::mbstate_t>("CHS"));//GBK<->Unicodeת����
+			std::wstring_convert<std::codecvt_utf8<wchar_t>> cvt_utf8;//UTF-8<->Unicodeת����
+			std::wstring_convert<std::codecvt<wchar_t, char, std::mbstate_t>>cvt_ansi(new std::codecvt<wchar_t, char, std::mbstate_t>("CHS"));//GBK<->Unicodeת����
 			std::wstring unicode_str = cvt_ansi.from_bytes(gbk_str);
 			return cvt_utf8.to_bytes(unicode_str);
 		}
 
 		static string utf8_2_gbk(const string &utf8_str) {
-			std::wstring_convert<std::codecvt_utf8<wchar_t>> cvt_utf8;//UTF-8<->Unicodeת����
-			std::wstring_convert<std::codecvt<wchar_t, char, std::mbstate_t>>cvt_ansi(new std::codecvt<wchar_t, char, std::mbstate_t>("CHS"));//GBK<->Unicodeת����
-			std::wstring unicode_str = cvt_utf8.from_bytes(utf8_str);//UTF-8ת��ΪUnicode
-			return cvt_ansi.to_bytes(unicode_str);//Unicodeת��ΪGBK
+			std::wstring_convert<std::codecvt_utf8<wchar_t>> cvt_utf8;//UTF-8<->Unicodeת����
+			std::wstring_convert<std::codecvt<wchar_t, char, std::mbstate_t>>cvt_ansi(new std::codecvt<wchar_t, char, std::mbstate_t>("CHS"));//GBK<->Unicodeת����
+			std::wstring unicode_str = cvt_utf8.from_bytes(utf8_str);//UTF-8ת��ΪUnicode
+			return cvt_ansi.to_bytes(unicode_str);//Unicodeת��ΪGBK
 		}*/
 
 		static void gbk_to_utf8(const string& gbk, string &utf8)
@@ -556,7 +620,7 @@ namespace shine
 			delete[]sz_gbk;
 			delete[]wsz_gbk;
 		}
-#elif defined SHINE_OS_LINUX
+#elif (defined SHINE_OS_LINUX || defined SHINE_OS_APPLE)
 		static void convert(const char* from, const char *to, const string &input, string &output) {
 			output.clear();
 			size_t input_len = input.length();
@@ -587,7 +651,19 @@ namespace shine
 		}
 
 #endif
-        static string print_hex_string(const string &str){
+		string gbk_to_utf8() const {
+			string utf8;
+			gbk_to_utf8(*this, utf8);
+			return std::move(utf8);
+		}
+
+		string utf8_to_gbk() const {
+			string gbk;
+			utf8_to_gbk(*this, gbk);
+			return std::move(gbk);
+		}
+#endif
+		static string print_hex_string(const string &str) {
             static const uint8 buf[] = "0123456789ABCDEF";
             string ret;
             for (size_t i = 0; i < str.size(); i++)
